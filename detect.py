@@ -1,13 +1,13 @@
 from __future__ import division
 import time
-import torch 
+import torch
 import torch.nn as nn
 from torch.autograd import Variable
 import numpy as np
-import cv2 
+import cv2
 from util import *
 import argparse
-import os 
+import os
 import os.path as osp
 from darknet import Darknet
 import pickle as pkl
@@ -17,32 +17,32 @@ import random
 def arg_parse():
     """
     Parse arguements to the detect module
-    
+
     """
-    
+
     parser = argparse.ArgumentParser(description='YOLO v3 Detection Module')
-   
-    parser.add_argument("--images", dest = 'images', help = 
+
+    parser.add_argument("--images", dest = 'images', help =
                         "Image / Directory containing images to perform detection upon",
                         default = "imgs", type = str)
-    parser.add_argument("--det", dest = 'det', help = 
+    parser.add_argument("--det", dest = 'det', help =
                         "Image / Directory to store detections to",
                         default = "det", type = str)
     parser.add_argument("--bs", dest = "bs", help = "Batch size", default = 1)
     parser.add_argument("--confidence", dest = "confidence", help = "Object Confidence to filter predictions", default = 0.5)
     parser.add_argument("--nms_thresh", dest = "nms_thresh", help = "NMS Threshhold", default = 0.4)
-    parser.add_argument("--cfg", dest = 'cfgfile', help = 
+    parser.add_argument("--cfg", dest = 'cfgfile', help =
                         "Config file",
                         default = "cfg/yolov3.cfg", type = str)
-    parser.add_argument("--weights", dest = 'weightsfile', help = 
+    parser.add_argument("--weights", dest = 'weightsfile', help =
                         "weightsfile",
                         default = "yolov3.weights", type = str)
-    parser.add_argument("--reso", dest = 'reso', help = 
+    parser.add_argument("--reso", dest = 'reso', help =
                         "Input resolution of the network. Increase to increase accuracy. Decrease to increase speed",
                         default = "416", type = str)
-    
+
     return parser.parse_args()
-    
+
 args = arg_parse()
 images = args.images
 batch_size = int(args.bs)
@@ -66,7 +66,7 @@ print("Network successfully loaded")
 
 model.net_info["height"] = args.reso
 inp_dim = int(model.net_info["height"])
-assert inp_dim % 32 == 0 
+assert inp_dim % 32 == 0
 assert inp_dim > 32
 
 #If there's a GPU availible, put the model on GPU
@@ -87,7 +87,7 @@ except NotADirectoryError:
 except FileNotFoundError:
     print ("No file or directory with the name {}".format(images))
     exit()
-    
+
 if not os.path.exists(args.det):
     os.makedirs(args.det)
 
@@ -104,19 +104,19 @@ if (len(im_dim_list) % batch_size):
     leftover = 1
 
 if batch_size != 1:
-    num_batches = len(imlist) // batch_size + leftover            
+    num_batches = len(imlist) // batch_size + leftover
     im_batches = [torch.cat((im_batches[i*batch_size : min((i +  1)*batch_size,
-                        len(im_batches))]))  for i in range(num_batches)]  
+                        len(im_batches))]))  for i in range(num_batches)]
 
 write = 0
 
 
 if CUDA:
     im_dim_list = im_dim_list.cuda()
-    
+
 start_det_loop = time.time()
 for i, batch in enumerate(im_batches):
-#load the image 
+#load the image
     start = time.time()
     if CUDA:
         batch = batch.cuda()
@@ -136,10 +136,10 @@ for i, batch in enumerate(im_batches):
             print("----------------------------------------------------------")
         continue
 
-    prediction[:,0] += i*batch_size    #transform the atribute from index in batch to index in imlist 
+    prediction[:,0] += i*batch_size    #transform the atribute from index in batch to index in imlist
 
     if not write:                      #If we have't initialised output
-        output = prediction  
+        output = prediction
         write = 1
     else:
         output = torch.cat((output,prediction))
@@ -152,7 +152,7 @@ for i, batch in enumerate(im_batches):
         print("----------------------------------------------------------")
 
     if CUDA:
-        torch.cuda.synchronize()       
+        torch.cuda.synchronize()
 try:
     output
 except NameError:
@@ -209,4 +209,4 @@ print("----------------------------------------------------------")
 
 
 torch.cuda.empty_cache()
-    
+
