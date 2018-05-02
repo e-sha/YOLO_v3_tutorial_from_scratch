@@ -218,7 +218,6 @@ class Darknet(nn.Module):
                 if not write:              #if no collector has been intialised.
                     detections = x
                     write = 1
-
                 else:
                     detections = torch.cat((detections, x), 1)
 
@@ -226,6 +225,104 @@ class Darknet(nn.Module):
 
         return detections
 
+    def forward_dims(self, inp_dim):
+        modules = self.blocks[1:]
+        outputs = {-1: inp_dim}
+
+        cur = inp_dim
+        for i, module in enumerate(modules):
+            module_type = module['type']
+            if module_type == 'convolutional':
+                if not bool(module['pad']):
+                    cur -= int(module['size']) - 1
+                cur /= int(module['stride'])
+            elif module_type == 'upsample':
+                cur *= int(module['stride'])
+            elif module_type == 'route':
+                layers = [int(a) for  a in module['layers']]
+                if layers[0] < 0:
+                    layers[0] += i
+                cur = outputs[layers[0]]
+            elif module_type == 'shortcut':
+                # does not change size
+                pass
+            elif module_type == 'yolo':
+                # does not change size
+                pass
+            outputs[i] = cur
+        return outputs
+
+    def loss_function(self, detections, y, CUDA, inp_dim):
+        modules = self.blocks[1:]
+        det_corners = det2corners(detections)
+
+        # size of the tensor at each layer
+        tensor_size = self.forward_dims(inp_dim)
+
+        yolo_modules = [(i, x) for i, x in enumerate(modules) if x['type'] == 'yolo']
+        num_yolo_layers = len(yolo_modules)
+        # assume that all yolo modules share the same parameters values
+        ignore_thresh = [float(x[1]['ignore_thresh']) for x in yolo_modules]
+        assert(np.unique(ignore_thresh).size == 1) # yolo modules share parameters
+        ignore_thresh = ignore_thresh[0]
+        truth_thresh = [float(x[1]['truth_thresh']) for x in yolo_modules]
+        assert(np.unique(ignore_thresh).size == 1) # yolo modules share parameters
+        truth_thresh = truth_thresh[0]
+
+        # load anchors
+        anchors = [self.module_list[i][0].anchors for i, _ in yolo_modules]
+        num_anchors = np.array([len(a) for a in anchors])
+        anchors_cs = np.cumsum(num_anchors)
+        anchors = np.array([(a[0], a[1]) for layer_a in anchors for a in layer_a])
+        anchors = anchors[np.newaxis, :]
+
+        OBJ_IDX = 4
+
+        for i, img_y in enumerate(y):
+            img_corners = det_corners[i]
+            # convert boxes from relative to pixel coordinates
+            img_gt = (img_y.view((-1, 2, 2)) * img_dim).view((-1, 4))
+            # convert boxes to corners
+            gt_corners = det2corners(img_gt.unsqeeze(0)).sqeeze(0)
+            # compute IoU matrix. Rows correspond to detected corners,
+            # columns correspond to groundtruth corners
+            iou = bbox_iou(img_corners, gt_corners)
+            det_iou, gt_idx = torch.maximum(iou, dim=1)
+            # move all objectness score toward zero
+            delta_obj = -detections[:, OBJ_IDX]
+            # do not penalize objectness score for detections with huge IoU value
+            mask = det_iou > ignore_thresh
+            delta_obj[mask] = 0
+            # move objectness score to 1 for detections with the huge IoU value
+            mask = det_iou > truth_tresh
+            delta_obj[mask] = 1 - detections[:, OBJ_IDX]
+
+            # find a cell that has best match with the truth box
+            tmp_gt = img_gt[:, new_axis, 2:4]
+            inter = np.prod(np.minimum(anchors, img_gt), axis=2)
+            union = np.prod(tmp_gt, axis=2) + np.prod(anchors, axis=2) - inter
+            iou = inter / union
+            anchor_idx = np.argmax(iou, axis=1)
+            for j, img_gt in zip(anchor_idx, img_gt):
+                # index of the yolo layer with the best anchor
+                layer_idx = np.searchsorted(num_anchors, j, side='right')
+                # index of the module with the best anchor
+                module_idx = yolo_modules[layer_idx][0]
+                # get index of the cell corresponding to the truth box
+                ts = tensor_size[module_idx]
+                stride = inp_dim / ts
+                cell_x = img_gt[0] // stride
+                cell_y = img_gt[1] // stride
+                # index of the bounding box in detections
+                box_idx = 0
+                for k in range(module_idx):
+                    ts_k = tensor_size[yolo_modules[k][0]]
+                    box_idx += num_anchors[k] * ts_k * ts_k
+                box_idx += (ts * cell_x + cell_y) * num_anchors[layer_idx] + num_anchors[layer_idx] + j - anchors[cs]
+                # compute loss corresponding to the box
+
+        loss = None
+        return loss
 
     def load_weights(self, weightfile):
         #Open the weights file

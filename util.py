@@ -17,7 +17,7 @@ def unique(tensor):
     return tensor_res
 
 
-def bbox_iou(box1, box2):
+def bbox_iou(box1, box2, join=False):
     """
     Returns the IoU of two bounding boxes
 
@@ -26,6 +26,16 @@ def bbox_iou(box1, box2):
     #Get the coordinates of bounding boxes
     b1_x1, b1_y1, b1_x2, b1_y2 = box1[:,0], box1[:,1], box1[:,2], box1[:,3]
     b2_x1, b2_y1, b2_x2, b2_y2 = box2[:,0], box2[:,1], box2[:,2], box2[:,3]
+    if join:
+        b1_x1 = b1_x1.unsqeeze(1)
+        b1_y1 = b1_y1.unsqeeze(1)
+        b1_x2 = b1_x2.unsqeeze(1)
+        b1_y2 = b1_y2.unsqeeze(1)
+
+        b2_x1 = b2_x1.unsqeeze(0)
+        b2_y1 = b2_y1.unsqeeze(0)
+        b2_x2 = b2_x2.unsqeeze(0)
+        b2_y2 = b2_y2.unsqeeze(0)
 
     #get the corrdinates of the intersection rectangle
     inter_rect_x1 =  torch.max(b1_x1, b2_x1)
@@ -92,6 +102,12 @@ def predict_transform(prediction, inp_dim, anchors, num_classes, CUDA = True):
     prediction[:,:,:4] *= stride
 
     return prediction
+
+def det2corners(detections):
+    # tl - top left, br - bottom right
+    det_tl = detections[:, :, :2] - detections[:, :, 2:4] / 2
+    det_br = detections[:, :, :2] + detections[:, :, 2:4] / 2
+    return torch.cat((det_tl, det_br), 2)
 
 def write_results(prediction, confidence, num_classes, nms_conf = 0.4):
     conf_mask = (prediction[:,:,4] > confidence).float().unsqueeze(2)

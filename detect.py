@@ -49,7 +49,8 @@ batch_size = int(args.bs)
 confidence = float(args.confidence)
 nms_thesh = float(args.nms_thresh)
 start = 0
-CUDA = torch.cuda.is_available()
+#CUDA = torch.cuda.is_available()
+CUDA = False
 
 
 
