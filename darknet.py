@@ -276,52 +276,97 @@ class Darknet(nn.Module):
         anchors = np.array([(a[0], a[1]) for layer_a in anchors for a in layer_a])
         anchors = anchors[np.newaxis, :]
 
-        OBJ_IDX = 4
+        batch_size = detections.shape[0]
+        num_detections = detections.shape[1]
+        num_classes = detections.shape[2] - 5
+        # mask of predictions that objectness score should be moved to 1
+        obj_1_mask = np.zeros((batch_size, num_detections), dtype=np.bool)
+        # mask of predictions that objectness score should be moved to 0
+        obj_0_mask = np.ones((batch_size, num_detections), dtype=np.bool)
+        # mask of true class labes for each prediction
+        class_mask = np.zeros((batch_size, num_detections, num_classes), dtype=np.bool)
+        # index of box to compute box loss
+        gt_idx_array = np.zeros((batch_size, num_detections), dtype=int)
 
         for i, img_y in enumerate(y):
             img_corners = det_corners[i]
             # convert boxes from relative to pixel coordinates
             img_gt = (img_y.view((-1, 2, 2)) * img_dim).view((-1, 4))
-            # convert boxes to corners
+            # convert truth boxes to corners
             gt_corners = det2corners(img_gt.unsqeeze(0)).sqeeze(0)
             # compute IoU matrix. Rows correspond to detected corners,
             # columns correspond to groundtruth corners
             iou = bbox_iou(img_corners, gt_corners)
-            det_iou, gt_idx = torch.maximum(iou, dim=1)
-            # move all objectness score toward zero
-            delta_obj = -detections[:, OBJ_IDX]
+            gt_idx = np.argmax(iou, axis=1)
+            det_iou = iou[:, gt_idx]
             # do not penalize objectness score for detections with huge IoU value
             mask = det_iou > ignore_thresh
-            delta_obj[mask] = 0
+            obj_0_mask[i, mask] = False
+            obj_1_mask[i, mask] = False
             # move objectness score to 1 for detections with the huge IoU value
             mask = det_iou > truth_tresh
-            delta_obj[mask] = 1 - detections[:, OBJ_IDX]
+            obj_0_mask[i, mask] = False
+            obj_1_mask[i, mask] = True
+            # move class score to 1 for detections with the huge IoU value
+            true_classes = img_y[gt_idx[mask], 4].astype(int)
+            class_mask[i, mask, true_class] = True
+            gt_idx_array[i, mask] = gt_idx[mask]
 
             # find a cell that has best match with the truth box
-            tmp_gt = img_gt[:, new_axis, 2:4]
-            inter = np.prod(np.minimum(anchors, img_gt), axis=2)
+            img_gt_size = img_gt[:, new_axis, 2:4]
+            inter = np.prod(np.minimum(anchors, img_gt_size), axis=2)
             union = np.prod(tmp_gt, axis=2) + np.prod(anchors, axis=2) - inter
             iou = inter / union
             anchor_idx = np.argmax(iou, axis=1)
-            for j, img_gt in zip(anchor_idx, img_gt):
+            for q, j, gt_elem in zip(range(anchor_idx.size), anchor_idx, img_gt):
                 # index of the yolo layer with the best anchor
                 layer_idx = np.searchsorted(num_anchors, j, side='right')
-                # index of the module with the best anchor
+                # index of the module (layer) with the best anchor
                 module_idx = yolo_modules[layer_idx][0]
                 # get index of the cell corresponding to the truth box
                 ts = tensor_size[module_idx]
                 stride = inp_dim / ts
-                cell_x = img_gt[0] // stride
-                cell_y = img_gt[1] // stride
+                cell_x = gt_elem[0] // stride
+                cell_y = gt_elem[1] // stride
                 # index of the bounding box in detections
                 box_idx = 0
                 for k in range(module_idx):
+                    # size of the yolo layer
                     ts_k = tensor_size[yolo_modules[k][0]]
+                    # skip detections of previous yolo layers
                     box_idx += num_anchors[k] * ts_k * ts_k
-                box_idx += (ts * cell_x + cell_y) * num_anchors[layer_idx] + num_anchors[layer_idx] + j - anchors[cs]
+                # linear index of the cell
+                cell_idx = ts * cell_x + cell_y
+                # skip detections of the previous cells
+                box_idx += cell_idx * num_anchors[layer_idx]
+                # anchor index inside the yolo layer
+                layer_anchor_idx = j - (anchors_cs[layer_idx] - num_anchors[layer_idx])
+                box_idx += layer_anchor_idx
                 # compute loss corresponding to the box
+                obj_0_mask[i, box_idx] = False
+                obj_1_mask[i, box_idx] = True
+                # compute loss corresponding to the box
+                class_idx = int(gt_elem[4])
+                class_mask[i, box_idx, class_idx] = True
+                gt_idx_array[i, box_idx] = q
 
-        loss = None
+        # check mask correctness
+        assert(!np.any(obj_0_mask[obj_1_mask]))
+        assert(!np.any(obj_1_mask[obj_0_mask]))
+
+        # compute actual loss
+        # objectness loss
+        loss = (0 - detections[obj_0_mask, 4]).pow(2).sum()
+        loss += (1 - detections[obj_1_mask, 4]).pow(2).sum()
+        # class loss
+        compute_class_loss = np.tile(np.any(class_mask, axis=2)[:, :, None], [1, 1, num_classes])
+        batch_idx, obj_idx, class_idx = np.where(np.logical_and(class_mask, compute_class_loss))
+        loss += (1 - detections[batch_idx, obj_idx, 5 + class_idx]).pow(2).sum()
+        batch_idx, obj_idx, class_idx = np.where(np.logical_and(np.logical_not(class_mask), compute_class_loss))
+        loss += (0 - detections[batch_idx, obj_idx, 5 + class_idx]).pow(2).sum()
+        # box loss
+
+
         return loss
 
     def load_weights(self, weightfile):
