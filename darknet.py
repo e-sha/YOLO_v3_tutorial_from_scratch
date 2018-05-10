@@ -278,11 +278,14 @@ class Darknet(nn.Module):
 
         # size of the tensor for each yolo layer
         yolo_ts_array = np.array([tensor_size[x] for x, _ in yolo_modules])
-        #res_start_array = np.zeros(num_yolo_layers + 1)
-        #res_start_array[1:] = np.cumsum(num_anchors * yolo_ts_array)
         # number of boxes in each yolo layer
         yolo_num_box_array = [ts * ts * n for ts, n in zip(yolo_ts_array, num_anchors)]
+        # index of first box for each yolo layer
+        res_start_array = np.zeros(num_yolo_layers + 1)
+        res_start_array[1:] = np.cumsum(yolo_num_box_array)
+        # stride for each yolo layer
         yolo_stride_array = [inp_dim / ts for ts in yolo_ts_array]
+        # stride for each box in detections
         stride_long_array = np.hstack(([stride] * num_boxes
             for stride, num_boxes in zip(yolo_num_box_array, yolo_stride_array)))
 
@@ -337,12 +340,7 @@ class Darknet(nn.Module):
                 cell_x = gt_elem[0] // stride
                 cell_y = gt_elem[1] // stride
                 # index of the bounding box in detections
-                box_idx = 0
-                for k in range(layer_idx):
-                    # size of the yolo layer
-                    ts_k = yolo_ts_array[k]
-                    # skip detections of previous yolo layers
-                    box_idx += num_anchors[k] * ts_k * ts_k
+                box_idx = res_start_array[layer_idx]
                 # linear index of the cell
                 cell_idx = ts * cell_x + cell_y
                 # skip detections of the previous cells
