@@ -49,8 +49,8 @@ batch_size = int(args.bs)
 confidence = float(args.confidence)
 nms_thesh = float(args.nms_thresh)
 start = 0
-CUDA = torch.cuda.is_available()
-#CUDA = False
+#CUDA = torch.cuda.is_available()
+CUDA = False
 
 
 
@@ -125,6 +125,7 @@ for i, batch in enumerate(im_batches):
     prediction = model(Variable(batch, volatile = True), CUDA)
     y = [np.zeros((0, prediction.size()[1])) for i in range(prediction.size()[0])]
     loss = model.loss_function(prediction, y, batch.size()[2])
+    print(loss)
 
     prediction = write_results(prediction, confidence, num_classes, nms_conf = nms_thesh)
 

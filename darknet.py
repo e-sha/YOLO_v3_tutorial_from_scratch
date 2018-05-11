@@ -363,14 +363,13 @@ class Darknet(nn.Module):
         # check mask correctness
         assert(not np.any(obj_0_mask[obj_1_mask]))
         assert(not np.any(obj_1_mask[obj_0_mask]))
-        obj_0_mask = obj_0_mask.astype(np.uint8)
-        obj_1_mask = obj_1_mask.astype(np.uint8)
+        obj_0_mask = torch.from_numpy(obj_0_mask.astype(np.uint8))
+        obj_1_mask = torch.from_numpy(obj_1_mask.astype(np.uint8))
 
         # compute actual loss
         # objectness loss
         obj_score = detections[:, :, 4]
-        print(obj_score.size())
-        print(obj_0_mask.shape)
+        tmp = obj_score[obj_0_mask]
         loss = (0 - obj_score[obj_0_mask]).pow(2).sum()
         loss += (1 - obj_score[obj_1_mask]).pow(2).sum()
         # class loss
@@ -381,12 +380,19 @@ class Darknet(nn.Module):
         batch_idx, obj_idx, class_idx = np.where(np.logical_and(np.logical_not(class_mask), compute_class_loss))
         loss += (0 - detections[batch_idx, obj_idx, 5 + class_idx]).pow(2).sum()
         # box loss
-        det_boxes = detections[bow_with_loss_mask, :4]
+        det_boxes = detections[:, :, :4]
+        det_mask = np.tile(box_with_loss_mask[:, :, None], [1, 1, 4])
+        det_mask_torch = torch.from_numpy(det_mask.astype(np.uint8))
+        det_boxes = det_boxes[det_mask_torch]
         ts_array = np.tile((inp_dim / stride_long_array), [batch_size, 1])[box_with_loss_mask]
         gt_boxes = []
         for i, img_y in enumerate(y):
-            img_gt_idx_array[i, box_with_loss_mask[i]]
-            gt_boxes.append(img_y[img_gt_idx_array, :4])
+            img_gt_idx_array = gt_idx_array[i, box_with_loss_mask[i]]
+            if img_gt_idx_array.size > 0:
+                gt_boxes.append(img_y[img_gt_idx_array, :4])
+        if len(gt_boxes) == 0:
+            return loss
+
         gt_boxes = np.vstack(gt_boxes)
         scale = 1 #FIXME
         dx = scale * (det_boxes[:, :2] - gt_boxes[:, :2]) * ts_array
