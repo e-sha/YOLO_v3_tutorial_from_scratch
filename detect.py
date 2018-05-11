@@ -123,6 +123,8 @@ for i, batch in enumerate(im_batches):
         batch = batch.cuda()
 
     prediction = model(Variable(batch, volatile = True), CUDA)
+    y = [np.zeros((0, prediction.size()[1])) for i in range(prediction.size()[0])]
+    loss = model.loss_function(prediction, y, batch.size()[2])
 
     prediction = write_results(prediction, confidence, num_classes, nms_conf = nms_thesh)
 

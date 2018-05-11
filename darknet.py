@@ -227,7 +227,7 @@ class Darknet(nn.Module):
 
     def forward_dims(self, inp_dim):
         modules = self.blocks[1:]
-        outputs = {-1: inp_dim}
+        outputs = {-1: int(inp_dim)}
 
         cur = inp_dim
         for i, module in enumerate(modules):
@@ -235,7 +235,7 @@ class Darknet(nn.Module):
             if module_type == 'convolutional':
                 if not bool(module['pad']):
                     cur -= int(module['size']) - 1
-                cur /= int(module['stride'])
+                cur //= int(module['stride'])
             elif module_type == 'upsample':
                 cur *= int(module['stride'])
             elif module_type == 'route':
@@ -252,9 +252,11 @@ class Darknet(nn.Module):
             outputs[i] = cur
         return outputs
 
-    def loss_function(self, detections, y, CUDA, inp_dim):
+    def loss_function(self, detections, y, inp_dim):
         modules = self.blocks[1:]
         det_corners = det2corners(detections)
+
+        y = [torch.from_numpy(img_y) if isinstance(img_y, np.ndarray) else img_y for img_y in y]
 
         # size of the tensor at each layer
         tensor_size = self.forward_dims(inp_dim)
@@ -287,7 +289,7 @@ class Darknet(nn.Module):
         yolo_stride_array = [inp_dim / ts for ts in yolo_ts_array]
         # stride for each box in detections
         stride_long_array = np.hstack(([stride] * num_boxes
-            for stride, num_boxes in zip(yolo_num_box_array, yolo_stride_array)))
+            for num_boxes, stride in zip(yolo_num_box_array, yolo_stride_array)))
 
         batch_size = detections.shape[0]
         num_detections = detections.shape[1]
@@ -303,10 +305,12 @@ class Darknet(nn.Module):
 
         for i, img_y in enumerate(y):
             img_corners = det_corners[i]
+            if img_y.size()[0] == 0:
+                continue
             # convert boxes from relative to pixel coordinates
-            img_gt = (img_y.view((-1, 2, 2)) * img_dim).view((-1, 4))
+            img_gt = (img_y.view((-1, 2, 2)) * inp_dim).view((-1, 4))
             # convert truth boxes to corners
-            gt_corners = det2corners(img_gt.unsqeeze(0)).sqeeze(0)
+            gt_corners = det2corners(img_gt.unsqueeze(0)).squeeze(0)
             # compute IoU matrix. Rows correspond to detected corners,
             # columns correspond to groundtruth corners
             iou = bbox_iou(img_corners, gt_corners)
@@ -348,30 +352,47 @@ class Darknet(nn.Module):
                 # anchor index inside the yolo layer
                 layer_anchor_idx = j - (anchors_cs[layer_idx] - num_anchors[layer_idx])
                 box_idx += layer_anchor_idx
-                # compute loss corresponding to the box
+                # the box corresponds to object
                 obj_0_mask[i, box_idx] = False
                 obj_1_mask[i, box_idx] = True
-                # compute loss corresponding to the box
+                # set class of the box
                 class_idx = int(gt_elem[4])
                 class_mask[i, box_idx, class_idx] = True
                 gt_idx_array[i, box_idx] = q
 
         # check mask correctness
-        assert(!np.any(obj_0_mask[obj_1_mask]))
-        assert(!np.any(obj_1_mask[obj_0_mask]))
+        assert(not np.any(obj_0_mask[obj_1_mask]))
+        assert(not np.any(obj_1_mask[obj_0_mask]))
+        obj_0_mask = obj_0_mask.astype(np.uint8)
+        obj_1_mask = obj_1_mask.astype(np.uint8)
 
         # compute actual loss
         # objectness loss
-        loss = (0 - detections[obj_0_mask, 4]).pow(2).sum()
-        loss += (1 - detections[obj_1_mask, 4]).pow(2).sum()
+        obj_score = detections[:, :, 4]
+        print(obj_score.size())
+        print(obj_0_mask.shape)
+        loss = (0 - obj_score[obj_0_mask]).pow(2).sum()
+        loss += (1 - obj_score[obj_1_mask]).pow(2).sum()
         # class loss
-        compute_class_loss = np.tile(np.any(class_mask, axis=2)[:, :, None], [1, 1, num_classes])
+        box_with_loss_mask = np.any(class_mask, axis=2)
+        compute_class_loss = np.tile(box_with_loss_mask[:, :, None], [1, 1, num_classes])
         batch_idx, obj_idx, class_idx = np.where(np.logical_and(class_mask, compute_class_loss))
         loss += (1 - detections[batch_idx, obj_idx, 5 + class_idx]).pow(2).sum()
         batch_idx, obj_idx, class_idx = np.where(np.logical_and(np.logical_not(class_mask), compute_class_loss))
         loss += (0 - detections[batch_idx, obj_idx, 5 + class_idx]).pow(2).sum()
         # box loss
-
+        det_boxes = detections[bow_with_loss_mask, :4]
+        ts_array = np.tile((inp_dim / stride_long_array), [batch_size, 1])[box_with_loss_mask]
+        gt_boxes = []
+        for i, img_y in enumerate(y):
+            img_gt_idx_array[i, box_with_loss_mask[i]]
+            gt_boxes.append(img_y[img_gt_idx_array, :4])
+        gt_boxes = np.vstack(gt_boxes)
+        scale = 1 #FIXME
+        dx = scale * (det_boxes[:, :2] - gt_boxes[:, :2]) * ts_array
+        dw = scale * np.log(det_boxes[:, 2:4] / gt_boxes[:, 2:4])
+        loss += dx.pow(2).sum()
+        loss += dw.pow(2).sum()
 
         return loss
 
