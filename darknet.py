@@ -297,10 +297,11 @@ class Darknet(nn.Module):
         stride_long_array = torch.tensor(stride_long_array, dtype=torch.float32, device=dev)
 
         # move to torch tensor
-        num_anchors = torch.tensor(num_anchors, device=dev)
+        num_anchors = torch.tensor(num_anchors, dtype=torch.int64, device=dev)
         yolo_stride_array = torch.tensor(yolo_stride_array, dtype=torch.float32, device=dev)
         res_start_array = torch.tensor(res_start_array, dtype=torch.int64, device=dev)
         anchors_cs = torch.tensor(anchors_cs, dtype=torch.int64, device=dev)
+        yolo_ts_array = torch.tensor(yolo_ts_array, dtype=torch.int64, device=dev)
 
         batch_size = detections.shape[0]
         num_detections = detections.shape[1]
@@ -367,7 +368,7 @@ class Darknet(nn.Module):
             # set class of the box
             class_idx = img_y[:, 4].to(torch.int64)
             class_mask[i, box_idx, class_idx] = 1
-            gt_idx_array[i, box_idx] = torch.tensor(range(img_gt.size()[0]), dtype=torch.int64)
+            gt_idx_array[i, box_idx] = torch.tensor(range(img_gt.size()[0]), dtype=torch.int64, device=dev)
 
         # check mask correctness
         assert(not obj_0_mask[obj_1_mask].any())
@@ -430,7 +431,7 @@ class Darknet(nn.Module):
 
         scale = 1 #FIXME
         dx = scale * (det_boxes[:, :2] - gt_boxes[:, :2]) * ts_array.unsqueeze(1)
-        dw = scale * np.log(det_boxes[:, 2:4] / gt_boxes[:, 2:4])
+        dw = scale * torch.log(det_boxes[:, 2:4] / gt_boxes[:, 2:4])
         loss += dx.pow(2).sum()
         #print('dx: {}'.format(loss))
         loss += dw.pow(2).sum()

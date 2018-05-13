@@ -49,8 +49,8 @@ batch_size = int(args.bs)
 confidence = float(args.confidence)
 nms_thesh = float(args.nms_thresh)
 start = 0
-#CUDA = torch.cuda.is_available()
-CUDA = False
+CUDA = torch.cuda.is_available()
+#CUDA = False
 
 
 
@@ -125,11 +125,16 @@ for i, batch in enumerate(im_batches):
     prediction_all = model(Variable(batch, volatile = True), CUDA)
 
     prediction = write_results(prediction_all, confidence, num_classes, nms_conf = nms_thesh)
-    gt_pred = prediction[:, [1, 2, 3, 4, 7]]
+    if isinstance(prediction, int):
+        gt_pred = np.zeros((0, 5))
+        box2img = np.zeros(0)
+    else:
+        gt_pred = prediction[:, [1, 2, 3, 4, 7]]
+        box2img = prediction[:, 0]
     # convert gt corners to box in (center, size) format
     gt_pred[:, :2] = (gt_pred[:, :2] + gt_pred[:, 2:4]) / 2
     gt_pred[:, 2:4] = 2 * (gt_pred[:, 2:4] - gt_pred[:, :2])
-    y = [gt_pred[prediction[:, 0] == i] / inp_dim for i in range(batch.size()[0])]
+    y = [gt_pred[box2img == i] / inp_dim for i in range(batch.size()[0])]
     loss = model.loss_function(prediction_all, y, inp_dim, loaded_ims[i])
     print(loss)
 
