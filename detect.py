@@ -122,12 +122,16 @@ for i, batch in enumerate(im_batches):
     if CUDA:
         batch = batch.cuda()
 
-    prediction = model(Variable(batch, volatile = True), CUDA)
-    y = [np.zeros((0, prediction.size()[1])) for i in range(prediction.size()[0])]
-    loss = model.loss_function(prediction, y, batch.size()[2])
-    print(loss)
+    prediction_all = model(Variable(batch, volatile = True), CUDA)
 
-    prediction = write_results(prediction, confidence, num_classes, nms_conf = nms_thesh)
+    prediction = write_results(prediction_all, confidence, num_classes, nms_conf = nms_thesh)
+    gt_pred = prediction[:, [1, 2, 3, 4, 7]]
+    # convert gt corners to box in (center, size) format
+    gt_pred[:, :2] = (gt_pred[:, :2] + gt_pred[:, 2:4]) / 2
+    gt_pred[:, 2:4] = 2 * (gt_pred[:, 2:4] - gt_pred[:, :2])
+    y = [gt_pred[prediction[:, 0] == i] / inp_dim for i in range(batch.size()[0])]
+    loss = model.loss_function(prediction_all, y, inp_dim, loaded_ims[i])
+    print(loss)
 
     end = time.time()
 

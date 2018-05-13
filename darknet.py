@@ -252,11 +252,13 @@ class Darknet(nn.Module):
             outputs[i] = cur
         return outputs
 
-    def loss_function(self, detections, y, inp_dim):
+    def loss_function(self, detections, y, inp_dim, img):
+        dev = detections.device
+
         modules = self.blocks[1:]
         det_corners = det2corners(detections)
 
-        y = [torch.from_numpy(img_y) if isinstance(img_y, np.ndarray) else img_y for img_y in y]
+        y = [img_y if isinstance(img_y, torch.Tensor) else torch.tensor(img_y, device=dev) for img_y in y]
 
         # size of the tensor at each layer
         tensor_size = self.forward_dims(inp_dim)
@@ -273,132 +275,166 @@ class Darknet(nn.Module):
 
         # load anchors
         anchors = [self.module_list[i][0].anchors for i, _ in yolo_modules]
-        num_anchors = np.array([len(a) for a in anchors])
+        num_anchors = np.array([len(a) for a in anchors], dtype=np.int64)
+        anchor2layer = np.hstack([[i] * n for i, n in enumerate(num_anchors)])
+        anchor2layer = torch.tensor(anchor2layer, dtype=torch.int64, device=dev)
         anchors_cs = np.cumsum(num_anchors)
         anchors = np.array([(a[0], a[1]) for layer_a in anchors for a in layer_a])
-        anchors = anchors[np.newaxis, :]
+        anchors = torch.tensor(anchors[np.newaxis, :], dtype=torch.float32, device=dev)
 
         # size of the tensor for each yolo layer
         yolo_ts_array = np.array([tensor_size[x] for x, _ in yolo_modules])
         # number of boxes in each yolo layer
-        yolo_num_box_array = [ts * ts * n for ts, n in zip(yolo_ts_array, num_anchors)]
+        yolo_num_box_array = yolo_ts_array * yolo_ts_array * num_anchors
         # index of first box for each yolo layer
-        res_start_array = np.zeros(num_yolo_layers + 1)
+        res_start_array = np.zeros(num_yolo_layers + 1, dtype=np.int64)
         res_start_array[1:] = np.cumsum(yolo_num_box_array)
         # stride for each yolo layer
-        yolo_stride_array = [inp_dim / ts for ts in yolo_ts_array]
+        yolo_stride_array = inp_dim / yolo_ts_array
         # stride for each box in detections
         stride_long_array = np.hstack(([stride] * num_boxes
             for num_boxes, stride in zip(yolo_num_box_array, yolo_stride_array)))
+        stride_long_array = torch.tensor(stride_long_array, dtype=torch.float32, device=dev)
+
+        # move to torch tensor
+        num_anchors = torch.tensor(num_anchors, device=dev)
+        yolo_stride_array = torch.tensor(yolo_stride_array, dtype=torch.float32, device=dev)
+        res_start_array = torch.tensor(res_start_array, dtype=torch.int64, device=dev)
+        anchors_cs = torch.tensor(anchors_cs, dtype=torch.int64, device=dev)
 
         batch_size = detections.shape[0]
         num_detections = detections.shape[1]
         num_classes = detections.shape[2] - 5
         # mask of predictions that objectness score should be moved to 1
-        obj_1_mask = np.zeros((batch_size, num_detections), dtype=np.bool)
+        obj_1_mask = torch.zeros((batch_size, num_detections), dtype=torch.uint8, device=dev)
         # mask of predictions that objectness score should be moved to 0
-        obj_0_mask = np.ones((batch_size, num_detections), dtype=np.bool)
+        obj_0_mask = torch.ones((batch_size, num_detections), dtype=torch.uint8, device=dev)
         # mask of true class labes for each prediction
-        class_mask = np.zeros((batch_size, num_detections, num_classes), dtype=np.bool)
+        class_mask = torch.zeros((batch_size, num_detections, num_classes), dtype=torch.uint8, device=dev)
         # index of box to compute box loss
-        gt_idx_array = np.zeros((batch_size, num_detections), dtype=int)
+        gt_idx_array = torch.zeros((batch_size, num_detections), dtype=torch.int64, device=dev)
 
         for i, img_y in enumerate(y):
             img_corners = det_corners[i]
             if img_y.size()[0] == 0:
                 continue
             # convert boxes from relative to pixel coordinates
-            img_gt = (img_y.view((-1, 2, 2)) * inp_dim).view((-1, 4))
+            img_gt = (img_y[:, :4].view((-1, 2, 2)) * inp_dim).view((-1, 4))
             # convert truth boxes to corners
             gt_corners = det2corners(img_gt.unsqueeze(0)).squeeze(0)
             # compute IoU matrix. Rows correspond to detected corners,
             # columns correspond to groundtruth corners
-            iou = bbox_iou(img_corners, gt_corners)
-            gt_idx = np.argmax(iou, axis=1)
-            det_iou = iou[:, gt_idx]
+            iou = bbox_iou(img_corners, gt_corners, join=True)
+            det_iou, gt_idx = torch.max(iou, dim=1)
             # do not penalize objectness score for detections with huge IoU value
             mask = det_iou > ignore_thresh
-            obj_0_mask[i, mask] = False
-            obj_1_mask[i, mask] = False
+            obj_0_mask[i, mask] = 0
+            obj_1_mask[i, mask] = 0
             # move objectness score to 1 for detections with the huge IoU value
-            mask = det_iou > truth_tresh
-            obj_0_mask[i, mask] = False
-            obj_1_mask[i, mask] = True
+            mask = det_iou > truth_thresh
+            obj_0_mask[i, mask] = 0
+            obj_1_mask[i, mask] = 1
             # move class score to 1 for detections with the huge IoU value
-            true_classes = img_y[gt_idx[mask], 4].astype(int)
-            class_mask[i, mask, true_class] = True
+            true_classes = img_y[gt_idx[mask], 4].to(torch.int64)
+            class_mask[i, mask, true_classes] = 1
             gt_idx_array[i, mask] = gt_idx[mask]
 
             # find a cell that has best match with the truth box
-            img_gt_size = img_gt[:, new_axis, 2:4]
-            inter = np.prod(np.minimum(anchors, img_gt_size), axis=2)
-            union = np.prod(tmp_gt, axis=2) + np.prod(anchors, axis=2) - inter
+            img_gt_size = img_gt[:, 2:4].unsqueeze(1)
+            inter = torch.prod(torch.min(anchors, img_gt_size), dim=2)
+            union = torch.prod(img_gt_size, dim=2) + torch.prod(anchors, dim=2) - inter
             iou = inter / union
-            anchor_idx = np.argmax(iou, axis=1)
-            for q, j, gt_elem in zip(range(anchor_idx.size), anchor_idx, img_gt):
-                # index of the yolo layer with the best anchor
-                layer_idx = np.searchsorted(num_anchors, j, side='right')
-                # get index of the cell corresponding to the truth box
-                ts = yolo_ts_array[layer_idx]
-                stride = yolo_stride_array[layer_idx]
-                cell_x = gt_elem[0] // stride
-                cell_y = gt_elem[1] // stride
-                # index of the bounding box in detections
-                box_idx = res_start_array[layer_idx]
-                # linear index of the cell
-                cell_idx = ts * cell_x + cell_y
-                # skip detections of the previous cells
-                box_idx += cell_idx * num_anchors[layer_idx]
-                # anchor index inside the yolo layer
-                layer_anchor_idx = j - (anchors_cs[layer_idx] - num_anchors[layer_idx])
-                box_idx += layer_anchor_idx
-                # the box corresponds to object
-                obj_0_mask[i, box_idx] = False
-                obj_1_mask[i, box_idx] = True
-                # set class of the box
-                class_idx = int(gt_elem[4])
-                class_mask[i, box_idx, class_idx] = True
-                gt_idx_array[i, box_idx] = q
+            anchor_idx = torch.argmax(iou, dim=1)
+            # index of the yolo layer with the best anchor
+            layer_idx = anchor2layer[anchor_idx]
+            # get index of the cell corresponding to the truth box
+            ts = yolo_ts_array[layer_idx]
+            stride = yolo_stride_array[layer_idx]
+            cell_x = (img_gt[:, 0] / stride).to(torch.int64)
+            cell_y = (img_gt[:, 1] / stride).to(torch.int64)
+            # index of the bounding box in detections
+            box_idx = res_start_array[layer_idx]
+            # linear index of the cell
+            cell_idx = ts * cell_y + cell_x
+            # skip detections of the previous cells
+            box_idx += cell_idx * num_anchors[layer_idx]
+            # anchor index inside the yolo layer
+            layer_anchor_idx = anchor_idx - (anchors_cs[layer_idx] - num_anchors[layer_idx])
+            box_idx += layer_anchor_idx
+            # the box corresponds to object
+            obj_0_mask[i, box_idx] = 0
+            obj_1_mask[i, box_idx] = 1
+            # set class of the box
+            class_idx = img_y[:, 4].to(torch.int64)
+            class_mask[i, box_idx, class_idx] = 1
+            gt_idx_array[i, box_idx] = torch.tensor(range(img_gt.size()[0]), dtype=torch.int64)
 
         # check mask correctness
-        assert(not np.any(obj_0_mask[obj_1_mask]))
-        assert(not np.any(obj_1_mask[obj_0_mask]))
-        obj_0_mask = torch.from_numpy(obj_0_mask.astype(np.uint8))
-        obj_1_mask = torch.from_numpy(obj_1_mask.astype(np.uint8))
+        assert(not obj_0_mask[obj_1_mask].any())
+        assert(not obj_1_mask[obj_0_mask].any())
 
         # compute actual loss
         # objectness loss
         obj_score = detections[:, :, 4]
         tmp = obj_score[obj_0_mask]
         loss = (0 - obj_score[obj_0_mask]).pow(2).sum()
+        #print('obj_0: {}'.format(loss))
         loss += (1 - obj_score[obj_1_mask]).pow(2).sum()
+        #print('obj_1: {}'.format(loss))
         # class loss
-        box_with_loss_mask = np.any(class_mask, axis=2)
-        compute_class_loss = np.tile(box_with_loss_mask[:, :, None], [1, 1, num_classes])
-        batch_idx, obj_idx, class_idx = np.where(np.logical_and(class_mask, compute_class_loss))
+        #box_with_loss_mask = class_mask.any(dim=2) # does not work in torch 0.4 but in torch 0.5 does
+        box_with_loss_mask = class_mask.sum(dim=2) > 0
+        compute_class_loss = box_with_loss_mask.unsqueeze(2)
+        batch_idx, obj_idx, class_idx = np.where(class_mask)
         loss += (1 - detections[batch_idx, obj_idx, 5 + class_idx]).pow(2).sum()
+        #print('class_1: {}'.format(loss))
         batch_idx, obj_idx, class_idx = np.where(np.logical_and(np.logical_not(class_mask), compute_class_loss))
         loss += (0 - detections[batch_idx, obj_idx, 5 + class_idx]).pow(2).sum()
+        #print('class_0: {}'.format(loss))
         # box loss
-        det_boxes = detections[:, :, :4]
-        det_mask = np.tile(box_with_loss_mask[:, :, None], [1, 1, 4])
-        det_mask_torch = torch.from_numpy(det_mask.astype(np.uint8))
-        det_boxes = det_boxes[det_mask_torch]
-        ts_array = np.tile((inp_dim / stride_long_array), [batch_size, 1])[box_with_loss_mask]
+        det_mask = torch.nonzero(box_with_loss_mask)
+        det_boxes = detections[det_mask[:, 0], det_mask[:, 1], :4] / inp_dim
+
+        #print(detections[det_mask[:, 0], det_mask[:, 1], :5] / inp_dim)
+        #print(y)
+
+        ts_array = inp_dim / stride_long_array[det_mask[:, 1]]
         gt_boxes = []
         for i, img_y in enumerate(y):
             img_gt_idx_array = gt_idx_array[i, box_with_loss_mask[i]]
-            if img_gt_idx_array.size > 0:
+            if np.prod(list(img_gt_idx_array.size())) > 0:
                 gt_boxes.append(img_y[img_gt_idx_array, :4])
         if len(gt_boxes) == 0:
             return loss
 
-        gt_boxes = np.vstack(gt_boxes)
+
+        gt_boxes = torch.cat(gt_boxes, dim=0)
+
+        '''
+        import cv2
+
+        factor = torch.tensor(img.shape, dtype=torch.float32)[[1, 0]]
+        for box in gt_boxes:
+            tl = tuple(((box[:2] - box[2:4] / 2) * factor).to(torch.int32))
+            br = tuple(((box[:2] + box[2:4] / 2) * factor).to(torch.int32))
+            cv2.rectangle(img, tl, br, (0, 255, 0), 4)
+        for box in det_boxes:
+            tl = tuple(((box[:2] - box[2:4] / 2) * factor).to(torch.int32))
+            br = tuple(((box[:2] + box[2:4] / 2) * factor).to(torch.int32))
+            cv2.rectangle(img, tl, br, (0, 0, 255), 4)
+
+        cv2.imshow('', img)
+        cv2.waitKey(0)
+        cv2.destroyAllWindows()
+        '''
+
         scale = 1 #FIXME
-        dx = scale * (det_boxes[:, :2] - gt_boxes[:, :2]) * ts_array
+        dx = scale * (det_boxes[:, :2] - gt_boxes[:, :2]) * ts_array.unsqueeze(1)
         dw = scale * np.log(det_boxes[:, 2:4] / gt_boxes[:, 2:4])
         loss += dx.pow(2).sum()
+        #print('dx: {}'.format(loss))
         loss += dw.pow(2).sum()
+        #print('dw: {}'.format(loss))
 
         return loss
 

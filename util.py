@@ -27,15 +27,15 @@ def bbox_iou(box1, box2, join=False):
     b1_x1, b1_y1, b1_x2, b1_y2 = box1[:,0], box1[:,1], box1[:,2], box1[:,3]
     b2_x1, b2_y1, b2_x2, b2_y2 = box2[:,0], box2[:,1], box2[:,2], box2[:,3]
     if join:
-        b1_x1 = b1_x1.unsqeeze(1)
-        b1_y1 = b1_y1.unsqeeze(1)
-        b1_x2 = b1_x2.unsqeeze(1)
-        b1_y2 = b1_y2.unsqeeze(1)
+        b1_x1 = b1_x1.unsqueeze(1)
+        b1_y1 = b1_y1.unsqueeze(1)
+        b1_x2 = b1_x2.unsqueeze(1)
+        b1_y2 = b1_y2.unsqueeze(1)
 
-        b2_x1 = b2_x1.unsqeeze(0)
-        b2_y1 = b2_y1.unsqeeze(0)
-        b2_x2 = b2_x2.unsqeeze(0)
-        b2_y2 = b2_y2.unsqeeze(0)
+        b2_x1 = b2_x1.unsqueeze(0)
+        b2_y1 = b2_y1.unsqueeze(0)
+        b2_x2 = b2_x2.unsqueeze(0)
+        b2_y2 = b2_y2.unsqueeze(0)
 
     #get the corrdinates of the intersection rectangle
     inter_rect_x1 =  torch.max(b1_x1, b2_x1)
