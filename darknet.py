@@ -394,6 +394,9 @@ class Darknet(nn.Module):
         #print('class_0: {}'.format(loss))
         # box loss
         det_mask = torch.nonzero(box_with_loss_mask)
+        if det_mask.size()[0] == 0:
+            return loss
+
         det_boxes = detections[det_mask[:, 0], det_mask[:, 1], :4] / inp_dim
 
         #print(detections[det_mask[:, 0], det_mask[:, 1], :5] / inp_dim)
@@ -407,7 +410,6 @@ class Darknet(nn.Module):
                 gt_boxes.append(img_y[img_gt_idx_array, :4])
         if len(gt_boxes) == 0:
             return loss
-
 
         gt_boxes = torch.cat(gt_boxes, dim=0)
 
