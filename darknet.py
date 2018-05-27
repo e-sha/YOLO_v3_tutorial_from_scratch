@@ -170,11 +170,11 @@ class Darknet(nn.Module):
         self.blocks = parse_cfg(cfgfile)
         self.net_info, self.module_list = create_modules(self.blocks)
 
-    def forward(self, x, CUDA):
+    def forward(self, x):
         modules = self.blocks[1:]
         outputs = {}   #We cache the outputs for the route layer
 
-        write = 0
+        detections = []
         for i, module in enumerate(modules):
             module_type = (module["type"])
 
@@ -213,17 +213,11 @@ class Darknet(nn.Module):
                 num_classes = int (module["classes"])
 
                 #Transform
-                x = x.data
-                x = predict_transform(x, inp_dim, anchors, num_classes, CUDA)
-                if not write:              #if no collector has been intialised.
-                    detections = x
-                    write = 1
-                else:
-                    detections = torch.cat((detections, x), 1)
+                x = predict_transform(x, inp_dim, anchors, num_classes)
+                detections.append(x)
 
             outputs[i] = x
-
-        return detections
+        return torch.cat(detections, 1)
 
     def forward_dims(self, inp_dim):
         modules = self.blocks[1:]

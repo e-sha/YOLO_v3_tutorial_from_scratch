@@ -8,7 +8,10 @@ import numpy as np
 import cv2
 
 def unique(tensor):
-    tensor_np = tensor.cpu().numpy()
+    if tensor.requires_grad:
+        tensor_np = tensor.detach().cpu().numpy()
+    else:
+        tensor_np = tensor.cpu().numpy()
     unique_np = np.unique(tensor_np)
     unique_tensor = torch.from_numpy(unique_np)
 
@@ -54,8 +57,8 @@ def bbox_iou(box1, box2, join=False):
 
     return iou
 
-def predict_transform(prediction, inp_dim, anchors, num_classes, CUDA = True):
-
+def predict_transform(prediction, inp_dim, anchors, num_classes):
+    dev = prediction.device
 
     batch_size = prediction.size(0)
     stride =  inp_dim // prediction.size(2)
@@ -77,22 +80,15 @@ def predict_transform(prediction, inp_dim, anchors, num_classes, CUDA = True):
     grid = np.arange(grid_size)
     a,b = np.meshgrid(grid, grid)
 
-    x_offset = torch.FloatTensor(a).view(-1,1)
-    y_offset = torch.FloatTensor(b).view(-1,1)
-
-    if CUDA:
-        x_offset = x_offset.cuda()
-        y_offset = y_offset.cuda()
+    x_offset = torch.FloatTensor(a, device=dev).view(-1,1)
+    y_offset = torch.FloatTensor(b, device=dev).view(-1,1)
 
     x_y_offset = torch.cat((x_offset, y_offset), 1).repeat(1,num_anchors).view(-1,2).unsqueeze(0)
 
     prediction[:,:,:2] += x_y_offset
 
     #log space transform height and the width
-    anchors = torch.FloatTensor(anchors)
-
-    if CUDA:
-        anchors = anchors.cuda()
+    anchors = torch.FloatTensor(anchors, device=dev)
 
     anchors = anchors.repeat(grid_size*grid_size, 1).unsqueeze(0)
     prediction[:,:,2:4] = torch.exp(prediction[:,:,2:4])*anchors
@@ -122,10 +118,7 @@ def write_results(prediction, confidence, num_classes, nms_conf = 0.4):
 
     batch_size = prediction.size(0)
 
-    write = False
-
-
-
+    output = []
     for ind in range(batch_size):
         image_pred = prediction[ind]          #image Tensor
        #confidence threshholding
@@ -187,17 +180,12 @@ def write_results(prediction, confidence, num_classes, nms_conf = 0.4):
             batch_ind = image_pred_class.new(image_pred_class.size(0), 1).fill_(ind)      #Repeat the batch_id for as many detections of the class cls in the image
             seq = batch_ind, image_pred_class
 
-            if not write:
-                output = torch.cat(seq,1)
-                write = True
-            else:
-                out = torch.cat(seq,1)
-                output = torch.cat((output,out))
+            out = torch.cat(seq, 1)
+            output.append(out)
 
-    try:
-        return output
-    except:
+    if len(output) == 0:
         return 0
+    return torch.cat(output)
 
 def letterbox_image(img, inp_dim):
     '''resize image with unchanged aspect ratio using padding'''
