@@ -252,7 +252,9 @@ class Darknet(nn.Module):
         modules = self.blocks[1:]
         det_corners = det2corners(detections)
 
-        y = [img_y if isinstance(img_y, torch.Tensor) else torch.tensor(img_y, device=dev) for img_y in y]
+        y = [img_y if isinstance(img_y, torch.Tensor)
+                else torch.tensor(img_y, device=dev)
+                for img_y in y]
 
         # size of the tensor at each layer
         tensor_size = self.forward_dims(inp_dim)

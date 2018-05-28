@@ -25,9 +25,9 @@ def arg_parse():
 
     parser.add_argument("--images", help =
                         "Image / Directory containing images to perform detection upon",
-                        default = "imgs", type = str)
+                        default = "train_data/imgs", type = str)
     parser.add_argument("--labels", help="Directory containing groundtruth",
-                        default="labels")
+                        default="train_data/labels")
     parser.add_argument("--det", help =
                         "Image / Directory to store detections to",
                         default = "det")
@@ -52,7 +52,7 @@ confidence = float(args.confidence)
 nms_thesh = float(args.nms_thresh)
 start = 0
 CUDA = torch.cuda.is_available()
-dev = 'gpu' if CUDA else 'cpu'
+dev = 'cuda' if CUDA else 'cpu'
 
 num_classes = 80
 classes = load_classes("data/coco.names")
@@ -73,7 +73,7 @@ if CUDA:
     model.cuda()
 
 #Set the model in evaluation mode
-model.eval()
+model.train()
 
 read_dir = time.time()
 #Detection phase
@@ -86,8 +86,8 @@ except FileNotFoundError:
 
 data = [(x, osp.join(labels, osp.splitext(osp.basename(x))[0] + '.txt')) for x in imlist]
 for im_name, label_name in data:
-    assert(isfile(im_name), "No file with name {}".format(im_name))
-    assert(isfile(label_name), "No file with name {}".format(label_name))
+    assert osp.isfile(im_name), "No file with name {}".format(im_name)
+    assert osp.isfile(label_name), "No file with name {}".format(label_name)
 
 train_data = data
 
@@ -95,40 +95,29 @@ if not os.path.exists(args.det):
     os.makedirs(args.det)
 
 num_train_batches = (len(train_data) - 1) // batch_size + 1
-train_batches = [train_data[i*batch_size:(i+1)*batch_size] for i in range(num_train_batches)]
+train_batches = [zip(*(train_data[i*batch_size:(i+1)*batch_size])) for i in range(num_train_batches)]
 
 output = []
 start_det_loop = time.time()
-for i, batch in enumerate(train_batches):
+for i, (im_names, label_names) in enumerate(train_batches):
     start = time.time()
 
     # load the image
-    im_names, label_names = batch
     batch_imgs = [cv2.imread(x) for x in im_names]
     tr_imgs = list(map(prep_image, batch_imgs, [inp_dim for x in range(len(im_names))]))
-    tr_imgs = torch.cat(tr_imgs)
+    tr_imgs = torch.tensor(torch.cat(tr_imgs), device=dev)
     # load the labels
-    batch_labels = list(map(lambda x: np.fromfile(x, sep=' ').shape(-1, 5), label_names))
+    batch_labels = list(map(lambda x: np.fromfile(x, sep=' ').reshape(-1, 5), label_names))
+    batch_labels = list(map(lambda x: x[:, [1, 2, 3, 4, 0]], batch_labels))
     # transform
 
-    if CUDA:
-        batch = batch.cuda()
     model.zero_grad()
     prediction_all = model(Variable(tr_imgs))
 
     prediction = write_results(prediction_all, confidence, num_classes, nms_conf = nms_thesh)
-    if isinstance(prediction, int):
-        gt_pred = np.zeros((0, 5))
-        box2img = np.zeros(0)
-    else:
-        gt_pred = prediction[:, [1, 2, 3, 4, 7]]
-        box2img = prediction[:, 0]
-    # convert gt corners to box in (center, size) format
-    gt_pred[:, :2] = (gt_pred[:, :2] + gt_pred[:, 2:4]) / 2
-    gt_pred[:, 2:4] = 2 * (gt_pred[:, 2:4] - gt_pred[:, :2])
-    y = [gt_pred[box2img == i] / inp_dim for i in range(batch.size()[0])]
-    loss = model.loss_function(prediction_all, y, inp_dim, loaded_ims[i])
+    loss = model.loss_function(prediction_all, batch_labels, inp_dim, loaded_ims[i])
 
+    print(loss)
     #graph = make_dot(loss, params=dict(model.named_parameters()))
     #graph.render('/tmp/graph')
     end = time.time()

@@ -80,15 +80,15 @@ def predict_transform(prediction, inp_dim, anchors, num_classes):
     grid = np.arange(grid_size)
     a,b = np.meshgrid(grid, grid)
 
-    x_offset = torch.FloatTensor(a, device=dev).view(-1,1)
-    y_offset = torch.FloatTensor(b, device=dev).view(-1,1)
+    x_offset = torch.tensor(a, dtype=torch.float32, device=dev).view(-1,1)
+    y_offset = torch.tensor(b, dtype=torch.float32, device=dev).view(-1,1)
 
     x_y_offset = torch.cat((x_offset, y_offset), 1).repeat(1,num_anchors).view(-1,2).unsqueeze(0)
 
     prediction[:,:,:2] += x_y_offset
 
     #log space transform height and the width
-    anchors = torch.FloatTensor(anchors, device=dev)
+    anchors = torch.tensor(anchors, dtype=torch.float32, device=dev)
 
     anchors = anchors.repeat(grid_size*grid_size, 1).unsqueeze(0)
     prediction[:,:,2:4] = torch.exp(prediction[:,:,2:4])*anchors
