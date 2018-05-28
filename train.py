@@ -13,6 +13,7 @@ from darknet import Darknet
 import pickle as pkl
 import pandas as pd
 import random
+from torchviz import make_dot, make_dot_from_trace
 
 def arg_parse():
     """
@@ -22,29 +23,30 @@ def arg_parse():
 
     parser = argparse.ArgumentParser(description='YOLO v3 Detection Module')
 
-    parser.add_argument("--images", dest = 'images', help =
+    parser.add_argument("--images", help =
                         "Image / Directory containing images to perform detection upon",
                         default = "imgs", type = str)
-    parser.add_argument("--det", dest = 'det', help =
+    parser.add_argument("--labels", help="Directory containing groundtruth",
+                        default="labels")
+    parser.add_argument("--det", help =
                         "Image / Directory to store detections to",
-                        default = "det", type = str)
-    parser.add_argument("--bs", dest = "bs", help = "Batch size", default = 1)
-    parser.add_argument("--confidence", dest = "confidence", help = "Object Confidence to filter predictions", default = 0.5)
-    parser.add_argument("--nms_thresh", dest = "nms_thresh", help = "NMS Threshhold", default = 0.4)
-    parser.add_argument("--cfg", dest = 'cfgfile', help =
-                        "Config file",
-                        default = "cfg/yolov3.cfg", type = str)
-    parser.add_argument("--weights", dest = 'weightsfile', help =
-                        "weightsfile",
-                        default = "yolov3.weights", type = str)
-    parser.add_argument("--reso", dest = 'reso', help =
+                        default = "det")
+    parser.add_argument("--bs", help = "Batch size", default = 1)
+    parser.add_argument("--confidence", help = "Object Confidence to filter predictions", default=0.5)
+    parser.add_argument("--nms_thresh", help = "NMS Threshhold", default=0.4)
+    parser.add_argument("--cfg", dest = 'cfgfile', help = "Config file",
+                        default = "cfg/yolov3.cfg")
+    parser.add_argument("--weights", dest = 'weightsfile', help = "weightsfile",
+                        default = "yolov3.weights")
+    parser.add_argument("--reso", help =
                         "Input resolution of the network. Increase to increase accuracy. Decrease to increase speed",
-                        default = "416", type = str)
+                        default = "416")
 
     return parser.parse_args()
 
 args = arg_parse()
-images = args.images
+images = osp.realpath(args.images)
+labels = osp.realpath(args.labels)
 batch_size = int(args.bs)
 confidence = float(args.confidence)
 nms_thesh = float(args.nms_thresh)
@@ -75,39 +77,44 @@ model.eval()
 
 read_dir = time.time()
 #Detection phase
+
 try:
-    imlist = [osp.join(osp.realpath('.'), images, img) for img in os.listdir(images)]
-except NotADirectoryError:
-    imlist = []
-    imlist.append(osp.join(osp.realpath('.'), images))
+    imlist = [osp.join(images, img) for img in os.listdir(images)]
 except FileNotFoundError:
-    print ("No file or directory with the name {}".format(images))
+    print ("No directory with the name {}".format(images))
     exit()
+
+data = [(x, osp.join(labels, osp.splitext(osp.basename(x))[0] + '.txt')) for x in imlist]
+for im_name, label_name in data:
+    assert(isfile(im_name), "No file with name {}".format(im_name))
+    assert(isfile(label_name), "No file with name {}".format(label_name))
+
+train_data = data
 
 if not os.path.exists(args.det):
     os.makedirs(args.det)
 
-load_batch = time.time()
-loaded_ims = [cv2.imread(x) for x in imlist]
-
-im_batches = list(map(prep_image, loaded_ims, [inp_dim for x in range(len(imlist))]))
-im_dim_list = [(x.shape[1], x.shape[0]) for x in loaded_ims]
-im_dim_list = torch.FloatTensor(im_dim_list, device=dev).repeat(1,2)
-
-if batch_size != 1:
-    num_batches = (len(imlist) - 1) // batch_size + 1
-    im_batches = [torch.cat((im_batches[i*batch_size : min((i +  1)*batch_size,
-                        len(im_batches))]))  for i in range(num_batches)]
+num_train_batches = (len(train_data) - 1) // batch_size + 1
+train_batches = [train_data[i*batch_size:(i+1)*batch_size] for i in range(num_train_batches)]
 
 output = []
 start_det_loop = time.time()
-for i, batch in enumerate(im_batches):
-#load the image
+for i, batch in enumerate(train_batches):
     start = time.time()
+
+    # load the image
+    im_names, label_names = batch
+    batch_imgs = [cv2.imread(x) for x in im_names]
+    tr_imgs = list(map(prep_image, batch_imgs, [inp_dim for x in range(len(im_names))]))
+    tr_imgs = torch.cat(tr_imgs)
+    # load the labels
+    batch_labels = list(map(lambda x: np.fromfile(x, sep=' ').shape(-1, 5), label_names))
+    # transform
+
     if CUDA:
         batch = batch.cuda()
-    with torch.no_grad():
-        prediction_all = model(Variable(batch))
+    model.zero_grad()
+    prediction_all = model(Variable(tr_imgs))
 
     prediction = write_results(prediction_all, confidence, num_classes, nms_conf = nms_thesh)
     if isinstance(prediction, int):
@@ -122,13 +129,17 @@ for i, batch in enumerate(im_batches):
     y = [gt_pred[box2img == i] / inp_dim for i in range(batch.size()[0])]
     loss = model.loss_function(prediction_all, y, inp_dim, loaded_ims[i])
 
+    #graph = make_dot(loss, params=dict(model.named_parameters()))
+    #graph.render('/tmp/graph')
     end = time.time()
+    loss.backward()
+    b_end = time.time()
 
     if type(prediction) == int:
-
         for im_num, image in enumerate(imlist[i*batch_size: min((i +  1)*batch_size, len(imlist))]):
             im_id = i*batch_size + im_num
             print("{0:20s} predicted in {1:6.3f} seconds".format(image.split("/")[-1], (end - start)/batch_size))
+            print("{0:20s} gradients computation in {1:6.3f} seconds".format(image.split("/")[-1], (b_end - end)/batch_size))
             print("{0:20s} {1:s}".format("Objects Detected:", ""))
             print("{0:20s} {1:f}".format("Loss:", loss))
             print("----------------------------------------------------------")
@@ -142,6 +153,7 @@ for i, batch in enumerate(im_batches):
         im_id = i*batch_size + im_num
         objs = [classes[int(x[-1])] for x in output[-1] if int(x[0]) == im_id]
         print("{0:20s} predicted in {1:6.3f} seconds".format(image.split("/")[-1], (end - start)/batch_size))
+        print("{0:20s} gradients computation in {1:6.3f} seconds".format(image.split("/")[-1], (b_end - end)/batch_size))
         print("{0:20s} {1:s}".format("Objects Detected:", " ".join(objs)))
         print("{0:20s} {1:f}".format("Loss:", loss))
         print("----------------------------------------------------------")
