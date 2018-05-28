@@ -50,7 +50,7 @@ confidence = float(args.confidence)
 nms_thesh = float(args.nms_thresh)
 start = 0
 CUDA = torch.cuda.is_available()
-dev = 'gpu' if CUDA else 'cpu'
+dev = 'cuda' if CUDA else 'cpu'
 
 num_classes = 80
 classes = load_classes("data/coco.names")
@@ -153,7 +153,7 @@ if len(output) == 0:
     print ("No detections were made")
     exit()
 
-output = torch.cat(output)
+output = torch.cat(output).cpu()
 
 im_dim_list = torch.index_select(im_dim_list, 0, output[:,0].long())
 
