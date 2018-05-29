@@ -246,7 +246,7 @@ class Darknet(nn.Module):
             outputs[i] = cur
         return outputs
 
-    def loss_function(self, detections, y, inp_dim, img):
+    def loss_function(self, detections, y, inp_dim):
         dev = detections.device
 
         modules = self.blocks[1:]
