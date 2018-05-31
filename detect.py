@@ -119,8 +119,10 @@ for i, batch in enumerate(im_batches):
     # convert gt corners to box in (center, size) format
     gt_pred[:, :2] = (gt_pred[:, :2] + gt_pred[:, 2:4]) / 2
     gt_pred[:, 2:4] = 2 * (gt_pred[:, 2:4] - gt_pred[:, :2])
-    y = [gt_pred[box2img == i] / inp_dim for i in range(batch.size()[0])]
-    loss = model.loss_function(prediction_all, y, inp_dim, loaded_ims[i])
+    gt_boxes = [gt_pred[box2img == i, :4] / inp_dim for i in range(batch.size()[0])]
+    gt_classes = [gt_pred[box2img == i, 4] for i in range(batch.size()[0])]
+    y = [torch.cat((boxes, classes.reshape(-1, 1)), 1) for boxes, classes in zip(gt_boxes, gt_classes)]
+    loss = model.loss_function(prediction_all, y, inp_dim)
 
     end = time.time()
 

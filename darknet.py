@@ -255,6 +255,15 @@ class Darknet(nn.Module):
         y = [img_y if isinstance(img_y, torch.Tensor)
                 else torch.tensor(img_y, device=dev)
                 for img_y in y]
+        # I don't know why but the instruction above
+        # does not move data to propper device
+        if dev.type == 'cuda':
+            y = [img_y if img_y.device.type == 'cuda'
+                    and img_y.device.index == dev.index
+                    else img_y.cuda(dev.index)
+                    for img_y in y]
+        else:
+            y = [img_y.cpu() for img_y in y]
 
         # size of the tensor at each layer
         tensor_size = self.forward_dims(inp_dim)

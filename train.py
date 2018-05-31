@@ -25,7 +25,7 @@ def arg_parse():
 
     parser.add_argument("--images", help =
                         "Image / Directory containing images to perform detection upon",
-                        default = "train_data/imgs", type = str)
+                        default = "train_data/images", type = str)
     parser.add_argument("--labels", help="Directory containing groundtruth",
                         default="train_data/labels")
     parser.add_argument("--det", help =
@@ -107,7 +107,9 @@ for i, (im_names, label_names) in enumerate(train_batches):
     # load the image
     batch_imgs = [cv2.imread(x) for x in im_names]
     tr_imgs = list(map(prep_image, batch_imgs, [inp_dim for x in range(len(im_names))]))
-    tr_imgs = torch.tensor(torch.cat(tr_imgs), device=dev)
+    tr_imgs = torch.cat(tr_imgs)
+    if not dev == 'cpu':
+        tr_imgs = tr_imgs.cuda()
     # load the labels
     batch_labels = list(map(lambda x: np.fromfile(x, sep=' ', dtype=np.float32).reshape(-1, 5), label_names))
     batch_labels = list(map(lambda x: x[:, [1, 2, 3, 4, 0]], batch_labels))
@@ -132,8 +134,8 @@ for i, (im_names, label_names) in enumerate(train_batches):
         gt = list(map(lambda x: classes[int(x)], batch_labels[im_num][:, -1]))
         print("{0:20s} predicted in {1:6.3f} seconds".format(image.split("/")[-1], (end - start)/batch_size))
         print("{0:20s} gradients computation in {1:6.3f} seconds".format(image.split("/")[-1], (b_end - end)/batch_size))
-        print("{0:20s} {1:s}".format("Objects Detected:", ", ".join(objs)))
-        print("{0:20s} {1:s}".format("Objects marked:", ", ".join(gt)))
+        print("{0:20s} {1:s}".format("Objects Detected:", ", ".join(sorted(objs))))
+        print("{0:20s} {1:s}".format("Objects marked:", ", ".join(sorted(gt))))
         print("{0:20s} {1:f}".format("Loss:", loss))
         print("----------------------------------------------------------")
 
